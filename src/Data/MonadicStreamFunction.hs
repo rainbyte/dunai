@@ -36,7 +36,8 @@ instance Functor m => Functor (MStreamF m r)
 
 instance Applicative m => Applicative (MStreamF m r) where
   -- pure a = constantly a
-  pure a = MStreamF $ \_ -> pure (a, pure a)
+  pure a = go 
+    where go = MStreamF $ \_ -> pure (a, go)
   {-
   fs <*> as = proc _ -> do
       f <- fs -< ()
