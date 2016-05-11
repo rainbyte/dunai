@@ -118,14 +118,15 @@ edge :: SF Bool (Event ())
 edge = edgeFrom True
 
 edgeBy :: (a -> a -> Maybe b) -> a -> SF a (Event b)
-edgeBy isEdge a_prev = MStreamF $ \a ->
-  return (maybeToEvent (isEdge a_prev a), edgeBy isEdge a)
+edgeBy isEdge a_prev = MStreamF $ \a -> do
+  let res = maybeToEvent (isEdge a_prev a)
+  res `seq` return (res, edgeBy isEdge a)
 
 edgeFrom :: Bool -> SF Bool (Event())
 edgeFrom prev = MStreamF $ \a -> do
   let res = if prev then NoEvent else if a then Event () else NoEvent
       ct  = edgeFrom a
-  return (res, ct)
+  res `seq` return (res, ct)
 
 -- | Suppression of initial (at local time 0) event.
 notYet :: SF (Event a) (Event a)
@@ -133,8 +134,9 @@ notYet = feedback False $ arr (\(e,c) ->
   if c then (e, True) else (NoEvent, True))
 
 hold :: a -> SF (Event a) a
-hold a = feedback a $ arr $ \(e,a') ->
-  dup (event a' id e)
+hold a = feedback a $ arr $ \(e,a') -> do
+  let res = event a' id e
+  a' `seq` e `seq` res `seq` dup res
  where dup x = (x,x)
 
 loopPre :: c -> SF (a, c) (b, c) -> SF a b
@@ -149,7 +151,7 @@ after q x = feedback q $ go
               let t' = t - dt
                   e  = if t > 0 && t' < 0 then Event x else NoEvent
                   ct = if t' < 0 then constant (NoEvent, t') else go
-              return ((e, t'), ct)
+              e `seq` t' `seq` ct `seq` return ((e, t'), ct)
 
 (-->) :: b -> SF a b -> SF a b
 b0 --> sf = MStreamF $ \a -> do 
@@ -179,15 +181,15 @@ dSwitch sf sfC = MStreamF $ \a -> do
   (o, ct) <- unMStreamF sf a
   case o of
     (b, Event c) -> do (_,ct') <- unMStreamF (sfC c) a
-                       return (b, ct')
-    (b, NoEvent) -> return (b, dSwitch ct sfC)
+                       b `seq` return (b, ct')
+    (b, NoEvent) -> b `seq` return (b, dSwitch ct sfC)
 
 switch :: SF a (b, Event c) -> (c -> SF a b) -> SF a b
 switch sf sfC = MStreamF $ \a -> do
   (o, ct) <- unMStreamF sf a
   case o of
     (_, Event c) -> unMStreamF (sfC c) a
-    (b, NoEvent) -> return (b, switch ct sfC)
+    (b, NoEvent) -> b `seq` return (b, switch ct sfC)
 
 parC :: SF a b -> SF [a] [b]
 parC sf = parC' [sf]
@@ -205,7 +207,7 @@ iterFrom :: (a -> a -> DTime -> b -> b) -> b -> SF a b
 iterFrom f b = MStreamF $ \a -> do
   dt <- ask
   let b' = f a a dt b
-  return (b, iterFrom f b')
+  b `seq` b' `seq` a `seq` return (b, iterFrom f b')
 
 reactimate :: IO a -> (Bool -> IO (DTime, Maybe a)) -> (Bool -> b -> IO Bool) -> SF a b -> IO ()
 reactimate senseI sense actuate sf = do
@@ -217,7 +219,7 @@ reactimate senseI sense actuate sf = do
        -- Sense
        senseSF     = switch senseFirst senseRest
        senseFirst  = liftMStreamF_ senseI >>> (arr $ \x -> ((0, x), Event x))
-       senseRest a = liftMStreamF_ (sense True) >>> (arr id *** keepLast a)
+       senseRest a = liftMStreamF_ (sense True) >>> (arr id *** keepLast a) >>> (arr $ \(dt,mv) -> dt `seq` (dt, mv))
 
        keepLast :: Monad m => a -> MStreamF m (Maybe a) a
        keepLast a = MStreamF $ \ma -> let a' = fromMaybe a ma in return (a', keepLast a')

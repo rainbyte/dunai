@@ -96,7 +96,7 @@ liftMStreamFPurer liftPurer sf = MStreamF $ \a -> do
 liftMStreamFTrans :: (MonadTrans t, Monad m, Monad (t m)) => MStreamF m a b -> MStreamF (t m) a b
 liftMStreamFTrans sf = MStreamF $ \a -> do
   (b, sf') <- lift $ unMStreamF sf a
-  return (b, liftMStreamFTrans sf')
+  b `seq` return (b, liftMStreamFTrans sf')
 
 -- | Lifting the innest monadic actions in a monad stacks (generalisation of liftIO)
 liftMStreamFBase :: (Monad m2, MonadBase m1 m2) => MStreamF m1 a b -> MStreamF m2 a b
@@ -128,14 +128,15 @@ delay firsta = MStreamF $ \a -> return (firsta, delay a)
 switch :: Monad m => MStreamF m a (b, Maybe c) -> (c -> MStreamF m a b) -> MStreamF m a b
 switch sf f = MStreamF $ \a -> do
   ((b, c), sf') <- unMStreamF sf a
-  return (b, maybe (switch sf' f) f c)
+  let ct = maybe (switch sf' f) f c
+  b `seq` c `seq` ct `seq` return (b, ct)
 
 -- ** Feedback loops
 
 feedback :: Monad m => c -> MStreamF m (a, c) (b, c) -> MStreamF m a b
 feedback c sf = MStreamF $ \a -> do
   ((b', c'), sf') <- unMStreamF sf (a, c)
-  return (b', feedback c' sf')
+  b' `seq` c' `seq` return (b', feedback c' sf')
 
 -- * Reactimating
 
@@ -162,8 +163,8 @@ embed sf (a:as) = do
 -- | Runs an MSF indefinitely passing a unit-carrying input stream.
 reactimate :: Monad m => MStreamF m () () -> m ()
 reactimate sf = do
-  (_, sf') <- unMStreamF sf ()
-  reactimate sf'
+  (b, sf') <- unMStreamF sf ()
+  b `seq` reactimate sf'
 
 -- | Runs an MSF indefinitely passing a unit-carrying input stream.
 reactimateB :: Monad m => MStreamF m () Bool -> m ()
