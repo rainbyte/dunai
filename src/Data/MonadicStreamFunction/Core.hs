@@ -114,11 +114,12 @@ performOnFirstSample sfaction = MStreamF $ \a -> do
 
 -- ** Delays and signal overwriting
 
-iPre :: Monad m => a -> MStreamF m a b -> MStreamF m a b
-iPre a sf = MStreamF $ \_ -> unMStreamF sf a
+-- | Delay signal by one input sample
+iPre :: Monad m => a -> MStreamF m a a
+iPre firsta = MStreamF $ \a -> return (firsta, iPre a)
 
-delay :: Monad m => a -> MStreamF m a a
-delay firsta = MStreamF $ \a -> return (firsta, delay a)
+-- delay :: Monad m => a -> MStreamF m a a
+-- delay firsta = MStreamF $ \a -> return (firsta, delay a)
 -- delay firsta = feedback a $ lift swap
 --   where swap (a,b) = (b, a)
 -- delay firsta = next firsta identity
@@ -130,6 +131,14 @@ switch sf f = MStreamF $ \a -> do
   ((b, c), sf') <- unMStreamF sf a
   let ct = maybe (switch sf' f) f c
   b `seq` c `seq` ct `seq` return (b, ct)
+
+-- The one above is decoupled switching. The following implements immediate switching:
+-- switch :: Monad m => MStreamF m a (b, Maybe c) -> (c -> MStreamF m a b) -> MStreamF m a b
+-- switch sf f = MStreamF $ \a -> do
+--   ((b, c), sf') <- unMStreamF sf a
+--   return $ case c of
+--              Nothing -> (b, switch sf' f)
+--              Just x  -> unStreamF (f c) a
 
 -- ** Feedback loops
 

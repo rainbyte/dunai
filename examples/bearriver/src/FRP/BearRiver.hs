@@ -19,7 +19,7 @@ import           Control.Monad.Trans.MStreamF
 import           Data.Traversable             as T
 import           Data.Functor.Identity
 import           Data.Maybe
-import           Data.MonadicStreamFunction   as X hiding (iPre, reactimate, switch, sum, trace)
+import           Data.MonadicStreamFunction   as X hiding (reactimate, switch, sum, trace)
 import qualified Data.MonadicStreamFunction   as MSF
 import           Data.MonadicStreamFunction.ArrowLoop
 import           FRP.Yampa.VectorSpace        as X
@@ -36,8 +36,8 @@ identity = arr id
 constant :: b -> SF a b
 constant = arr . const
 
-iPre :: a -> SF a a
-iPre i = MStreamF $ \i' -> return (i, iPre i')
+-- iPre :: a -> SF a a
+-- iPre i = MStreamF $ \i' -> return (i, iPre i')
 
 -- * Continuous time
 
@@ -53,6 +53,13 @@ integralFrom n0 = MStreamF $ \n -> do
   let acc = n0 ^+^ realToFrac dt *^ n
   acc `seq` return (acc, integralFrom acc)
 
+-- Alternative implementation without MStreamF
+-- integralFrom :: VectorSpace a s => a -> SF a a
+-- integralFrom n = feedback n $ liftMStreamF $ \(n1, n0) -> do
+--   dt <- ask
+--   let acc = n0 ^+^ realToFrac dt *^ n1
+--   acc `seq` return (acc, acc)
+
 derivative :: VectorSpace a s => SF a a
 derivative = derivativeFrom zeroVector
 
@@ -61,6 +68,12 @@ derivativeFrom n0 = MStreamF $ \n -> do
   dt <- ask
   let res = (n ^-^ n0) ^/ realToFrac dt
   res `seq` return (res, derivativeFrom n)
+
+-- derivativeFrom :: VectorSpace a s => a -> SF a a
+-- derivativeFrom n = feedback n $ liftMStreamF $ \(n1, n0) -> do
+--   dt <- ask
+--   let res = (n1 ^-^ n0) ^/ realToFrac dt
+--   res `seq` return (res, res)
 
 -- * Events
 
@@ -122,22 +135,39 @@ edgeBy isEdge a_prev = MStreamF $ \a -> do
   let res = maybeToEvent (isEdge a_prev a)
   res `seq` return (res, edgeBy isEdge a)
 
+-- Implementation without MStreamF
+-- edgeBy :: (a -> a -> Maybe b) -> a -> SF a (Event b)
+-- edgeBy isEdge a_init = feedback a_init $ arr $ \(a, a_prev) ->
+--   let res = maybeToEvent (isEdge a_prev a)
+--   in res `seq` (res, a)
+
 edgeFrom :: Bool -> SF Bool (Event())
 edgeFrom prev = MStreamF $ \a -> do
   let res = if prev then NoEvent else if a then Event () else NoEvent
       ct  = edgeFrom a
   res `seq` return (res, ct)
 
+-- Implementation without MStreamF
+-- edgeFrom :: Bool -> SF Bool (Event())
+-- edgeFrom i = feedback i $ arr $ \(a, prev) ->
+--   let res = if prev || not a then NoEvent else Event ()
+--   in res `seq` (res, a)
+--
+-- -- or also
+--
+-- edgeFrom = edgeBy (\(a,prev) -> if prev || not a then Nothing else Just ())
+
 -- | Suppression of initial (at local time 0) event.
 notYet :: SF (Event a) (Event a)
 notYet = feedback False $ arr (\(e,c) ->
   if c then (e, True) else (NoEvent, True))
+-- Same as? notYet = NoEvent --> identity
 
 hold :: a -> SF (Event a) a
 hold a = feedback a $ arr $ \(e,a') -> do
   let res = event a' id e
   a' `seq` e `seq` res `seq` dup res
- where dup x = (x,x)
+-- Simpler expression: hold = accumHoldBy (\_ a -> a)
 
 loopPre :: c -> SF (a, c) (b, c) -> SF a b
 loopPre = feedback
@@ -153,15 +183,10 @@ after q x = feedback q $ go
                   ct = if t' < 0 then constant (NoEvent, t') else go
               e `seq` t' `seq` ct `seq` return ((e, t'), ct)
 
-(-->) :: b -> SF a b -> SF a b
-b0 --> sf = MStreamF $ \a -> do 
-  (_, ct) <- unMStreamF sf a
-  return (b0, ct)
+
 
 accumHoldBy :: (b -> a -> b) -> b -> SF (Event a) b
-accumHoldBy f b = feedback b $ arr $ \(a, b') ->
-  let b'' = event b' (f b') a
-  in (b'', b'')
+accumHoldBy f b = feedback b $ arr $ \(a, b') -> dup (event b' (f b') a)
 
 dpSwitchB :: Traversable col
           => col (SF a b) -> SF (a, col b) (Event c) -> (col (SF a b) -> c -> SF a (col b))
@@ -191,6 +216,9 @@ switch sf sfC = MStreamF $ \a -> do
     (_, Event c) -> unMStreamF (sfC c) a
     (b, NoEvent) -> b `seq` return (b, switch ct sfC)
 
+-- The above can be done with feedback, but then it would leak because the
+-- original SF won't be garbage-collected (even though it could).
+
 parC :: SF a b -> SF [a] [b]
 parC sf = parC' [sf]
 
@@ -208,6 +236,13 @@ iterFrom f b = MStreamF $ \a -> do
   dt <- ask
   let b' = f a a dt b
   b `seq` b' `seq` a `seq` return (b, iterFrom f b')
+
+-- Implementation without MStreamF
+-- iterFrom :: (a -> a -> DTime -> b -> b) -> b -> SF a b
+-- iterFrom f b = liftMStreamF $ \a -> do
+--   dt <- ask
+--   let b' = f a a dt b
+--   b `seq` b' `seq` a `seq` return (b, b')
 
 reactimate :: IO a -> (Bool -> IO (DTime, Maybe a)) -> (Bool -> b -> IO Bool) -> SF a b -> IO ()
 reactimate senseI sense actuate sf = do

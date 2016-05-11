@@ -76,8 +76,13 @@ sf1 >>>^ sf2 = sf1 >>> (liftMStreamFBase sf2)
 
 -- ** Delays and signal overwriting
 
--- See also: 'iPre'
+(-->) :: Monad m => b -> MStreamF m a b -> MStreamF m a b
+b0 --> sf = MStreamF $ \a -> do 
+  (_, ct) <- unMStreamF sf a
+  return (b0, ct)
 
+-- FIXME: This is just wrong.
+-- See also: 'iPre'
 iPost :: Monad m => b -> MStreamF m a b -> MStreamF m a b
 iPost b sf = MStreamF $ \_ -> return (b, sf)
 
